@@ -168,7 +168,7 @@ export default function HeaderActions() {
       <div className="relative" ref={notifRef}>
         <button onClick={() => { setShowNotif(v => !v); setShowSettings(false); setActiveTab(null); }}
           className="relative text-slate-400 hover:text-[#1E3A8A] transition-colors">
-          <Bell size={20} />
+          <Bell size={18} />
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full border-2 border-white flex items-center justify-center">
               <span className="text-[8px] font-black text-white leading-none">{unreadCount}</span>
@@ -222,7 +222,7 @@ export default function HeaderActions() {
       <div className="relative hidden sm:block" ref={settingsRef}>
         <button onClick={() => { setShowSettings(v => !v); setShowNotif(false); if (showSettings) setActiveTab(null); }}
           className="text-slate-400 hover:text-[#1E3A8A] transition-colors">
-          <Settings size={20} />
+          <Settings size={18} />
         </button>
 
         {showSettings && (
@@ -397,13 +397,13 @@ export default function HeaderActions() {
       </div>
 
       {/* ── User info — ✅ reaktif dari profil state ───────────────────────── */}
-      <div className="h-8 w-px bg-[#E9ECEF] hidden sm:block" />
+      <div className="h-6 w-px bg-[#E9ECEF] hidden sm:block" />
       <div className="flex items-center gap-3">
         <div className="text-right hidden md:block">
-          <p className="text-sm font-black text-[#1A1C1E] leading-none">{profil.nama}</p>
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">{profil.jabatan}</p>
+          <p className="text-xs font-black text-[#1A1C1E] leading-none">{profil.nama}</p>
+          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{profil.jabatan}</p>
         </div>
-        <div className="w-9 h-9 lg:w-10 lg:h-10 rounded-xl bg-slate-100 border border-[#E9ECEF] flex items-center justify-center overflow-hidden">
+        <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-lg bg-slate-100 border border-[#E9ECEF] flex items-center justify-center overflow-hidden">
           <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Admin" alt="User" />
         </div>
       </div>

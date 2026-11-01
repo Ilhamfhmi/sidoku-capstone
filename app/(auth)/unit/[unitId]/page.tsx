@@ -8,9 +8,12 @@ import {
   FileText, ImageIcon, FileSpreadsheet, Film, FolderOpen, Info, X,
   CheckCircle2, LayoutGrid, Menu, ArrowLeft, Pencil, Trash2, Plus,
   ExternalLink, Download, RefreshCw, AlertTriangle,
-  MessageSquare, CalendarDays, Send, Clock, Calendar
+  MessageSquare, CalendarDays, Send, Clock, Calendar, PanelLeftClose, PanelLeftOpen,
+  ChevronLeft, File as FileIcon
 } from 'lucide-react';
 import FileUpload from '@/components/FileUpload';
+import Modal from '@/components/Modal';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import { clsx } from 'clsx';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -96,6 +99,12 @@ function FormatBadge({ fmt }: { fmt: string }) {
   return <span className={clsx('text-[9px] font-black px-2 py-0.5 rounded border uppercase tracking-wider', colors[base] ?? 'bg-slate-50 text-slate-500 border-slate-100')}>{base}</span>;
 }
 
+function matchFormat(fmt: string, f: string) {
+  const s = (fmt || '').toLowerCase();
+  if (f === 'Video') return s.includes('mp4') || s.includes('mpeg');
+  return s.includes(f.toLowerCase());
+}
+
 export default function UnitPage() {
   const { unitId } = useParams<{ unitId: string }>();
   const unitLabel = unitId === 'UP' ? 'Unit Pengolah (UP)' : 'Unit Kearsipan (UK)';
@@ -106,6 +115,10 @@ export default function UnitPage() {
   const [selectedCatCode, setSelectedCatCode]   = useState(CATEGORIES[0].code);
   const [selectedItem, setSelectedItem]         = useState<AuditDocument | null>(null);
   const [searchQuery, setSearchQuery]           = useState('');
+  const [statusFilter, setStatusFilter]         = useState<'all' | 'missing' | 'partial' | 'done'>('all');
+  const [formatFilter, setFormatFilter]         = useState<'all' | 'PDF' | 'JPEG' | 'Excel' | 'Video'>('all');
+  const [treeCollapsed, setTreeCollapsed]       = useState(false);
+  const [uploadBusy, setUploadBusy]             = useState(false);
   const [expandedCats, setExpandedCats]         = useState<Set<string>>(new Set([CATEGORIES[0].code]));
   const [showUploadPanel, setShowUploadPanel]   = useState(false);
   const [showNotification, setShowNotification] = useState<string | null>(null);
@@ -118,8 +131,14 @@ export default function UnitPage() {
   const [uploadItem, setUploadItem]             = useState<AuditDocument | null>(null);
   const [fileViewItem, setFileViewItem]         = useState<AuditDocument | null>(null);
   const [isDeletingFile, setIsDeletingFile]     = useState(false);
+  const [confirmDeleteFile, setConfirmDeleteFile] = useState<AuditDocument | null>(null);
   const [showReplaceUpload, setShowReplaceUpload] = useState(false);
   const [detailItem, setDetailItem]             = useState<AuditDocument | null>(null);
+  // Tampilan detail item di panel tengah (muncul saat item di struktur direktori diklik)
+  const [viewItemId, setViewItemId]             = useState<number | null>(null);
+  const [previewUrl, setPreviewUrl]             = useState<string | null>(null);
+  const [confirmDelOne, setConfirmDelOne]       = useState<{ item: AuditDocument; url: string } | null>(null);
+  const [isDeletingOne, setIsDeletingOne]       = useState(false);
   const [editingDesc, setEditingDesc]           = useState(false);
   const [descValue, setDescValue]               = useState('');
   const [showAddModal, setShowAddModal]         = useState(false);
@@ -161,17 +180,29 @@ export default function UnitPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { fetchData(); }, [unitId]);
+  useEffect(() => {
+    try { setTreeCollapsed(localStorage.getItem('sidoku_tree_collapsed') === '1'); } catch {}
+  }, []);
 
   const categoryGroups = useMemo<CategoryGroup[]>(() =>
     CATEGORIES.map(cat => ({ code: cat.code, name: cat.label, items: items.filter(i => i.category_code === cat.code) })),
     [items, unitId]
   );
   const currentGroup    = useMemo(() => categoryGroups.find(g => g.code === selectedCatCode), [categoryGroups, selectedCatCode]);
+  const viewItem = useMemo(() => items.find(i => i.id === viewItemId) ?? null, [items, viewItemId]);
+  const viewSiblings = useMemo(() => viewItem ? items.filter(i => i.category_code === viewItem.category_code) : [], [items, viewItem]);
+  // Jika ada pencarian/filter aktif -> cari di SELURUH unit, bukan hanya folder yang terbuka
+  const isFiltering = searchQuery.trim() !== '' || statusFilter !== 'all' || formatFilter !== 'all';
+  const baseItems   = useMemo(() => isFiltering ? items : (currentGroup?.items ?? []), [isFiltering, items, currentGroup]);
   const filteredItems   = useMemo(() => {
-    if (!currentGroup) return [];
-    const q = searchQuery.toLowerCase();
-    return currentGroup.items.filter(i => i.nama_eviden.toLowerCase().includes(q) || i.item_code.toLowerCase().includes(q));
-  }, [currentGroup, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+    return baseItems.filter(i =>
+      (!q || i.nama_eviden.toLowerCase().includes(q) || i.item_code.toLowerCase().includes(q)) &&
+      (statusFilter === 'all' || i.status === statusFilter) &&
+      (formatFilter === 'all' || matchFormat(i.format_req, formatFilter))
+    );
+  }, [baseItems, searchQuery, statusFilter, formatFilter]);
+  function resetFilters() { setSearchQuery(''); setStatusFilter('all'); setFormatFilter('all'); }
   const catStats = useMemo(() => {
     const its = currentGroup?.items ?? [];
     return { total: its.length, done: its.filter(i=>i.status==='done').length, partial: its.filter(i=>i.status==='partial').length, missing: its.filter(i=>i.status==='missing').length };
@@ -195,10 +226,38 @@ export default function UnitPage() {
     setExpandedCats(prev => { const next = new Set(prev); next.has(code) ? next.delete(code) : next.add(code); return next; });
   }
   function selectCat(code: string) {
-    setSelectedCatCode(code); setSelectedItem(null); setShowUploadPanel(false);
-    setSearchQuery(''); if (!expandedCats.has(code)) toggleCat(code); setShowMobileSidebar(false);
+    setSelectedCatCode(code); setSelectedItem(null); setShowUploadPanel(false); setViewItemId(null);
+    resetFilters(); if (!expandedCats.has(code)) toggleCat(code); setShowMobileSidebar(false);
   }
   function openUpload(item: AuditDocument) { setUploadItem(item); }
+
+  // Buka item sebagai tampilan detail di panel tengah (sekaligus mengisi panel kanan)
+  function openItemView(item: AuditDocument) {
+    if (item.category_code !== selectedCatCode) setSelectedCatCode(item.category_code);
+    resetFilters();
+    setViewItemId(item.id);
+    openDetail(item);
+    setMobileView('table'); // di layar kecil, tampilkan detail item di tengah (panel kanan disembunyikan)
+    setShowMobileSidebar(false);
+  }
+  // Hapus satu file saja dari item
+  async function handleDeleteOneFile(item: AuditDocument, url: string) {
+    setIsDeletingOne(true);
+    try {
+      const path = url.split('/storage/v1/object/public/')[1];
+      if (path) await supabase.storage.from(path.split('/')[0]).remove([path.split('/').slice(1).join('/')]);
+      const all: string[] = item.file_urls?.length ? item.file_urls : item.file_url ? [item.file_url] : [];
+      const urls = all.filter(u => u !== url);
+      const status = urls.length <= 0 ? 'missing' : urls.length >= item.kebutuhan_file ? 'done' : 'partial';
+      const { error } = await supabase.from('audit_documents').update({
+        file_url: urls[urls.length - 1] ?? null, file_urls: urls, is_uploaded: urls.length > 0,
+        uploaded_count: urls.length, status, updated_at: new Date().toISOString(),
+      }).eq('id', item.id);
+      if (error) throw error;
+      notify('File berhasil dihapus'); fetchData();
+    } catch (err: any) { notify('Gagal: ' + err.message); }
+    finally { setIsDeletingOne(false); setConfirmDelOne(null); }
+  }
 
   // ✅ openDetail diperluas: reset state catatan & deadline
   function openDetail(item: AuditDocument) {
@@ -228,6 +287,7 @@ export default function UnitPage() {
       if (error) throw error;
       notify('Item berhasil dihapus'); setDeleteItem(null);
       if (detailItem?.id === item.id) setDetailItem(null);
+      if (viewItemId === item.id) setViewItemId(null);
       fetchData();
     } catch (err: any) { notify('Gagal: ' + err.message); }
   }
@@ -258,6 +318,12 @@ export default function UnitPage() {
       if (error) throw error;
       notify('Format diperbarui'); setInlineEditId(null); fetchData();
     } catch (err: any) { notify('Gagal: ' + err.message); }
+  }
+  // Supabase: ?download=<nama> membuat server mengirim Content-Disposition: attachment,
+  // sehingga browser mengunduh ke lokal alih-alih membuka tab baru.
+  function downloadUrl(url: string) {
+    const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'file');
+    return `${url.split('?')[0]}?download=${encodeURIComponent(name)}`;
   }
   async function handleDeleteFile(item: AuditDocument) {
     setIsDeletingFile(true);
@@ -334,12 +400,42 @@ export default function UnitPage() {
     </div>
   );
 
-  const SidebarContent = () => (
+  // Struktur direktori: simpan pilihan ciut/buka (desktop)
+  function toggleTree() {
+    setTreeCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('sidoku_tree_collapsed', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }
+
+  const SidebarContent = ({ compact = false }: { compact?: boolean }) => (
     <>
-      <div className="px-4 py-3.5 border-b border-[#E9ECEF] flex items-center justify-between">
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Struktur Direktori</p>
+      <div className={clsx('border-b border-[#E9ECEF] flex items-center', compact ? 'justify-center py-3' : 'px-4 py-3.5 justify-between')}>
+        {!compact && <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Struktur Direktori</p>}
         <button onClick={() => setShowMobileSidebar(false)} className="lg:hidden text-slate-300 hover:text-slate-500"><X size={16} /></button>
+        <button onClick={toggleTree} aria-label={compact ? 'Perluas struktur direktori' : 'Ciutkan struktur direktori'}
+          title={compact ? 'Perluas struktur direktori' : 'Ciutkan struktur direktori'}
+          className="hidden lg:flex w-7 h-7 items-center justify-center rounded-lg text-slate-400 hover:text-[#1E3A8A] hover:bg-slate-50 transition-colors">
+          {compact ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
       </div>
+      {compact ? (
+        <div className="flex-1 overflow-y-auto py-2 flex flex-col items-center gap-1">
+          {categoryGroups.map(group => {
+            const pct = catPercent(group.items);
+            const isActive = selectedCatCode === group.code;
+            return (
+              <button key={group.code} onClick={() => selectCat(group.code)} title={`${group.code} ${group.name} · ${pct}%`}
+                className={clsx('w-10 py-1.5 rounded-lg flex flex-col items-center gap-0.5 transition-all',
+                  isActive ? 'bg-[#1E3A8A] text-white' : 'text-slate-500 hover:bg-slate-50')}>
+                <FolderOpen size={14} className={isActive ? 'text-white/80' : 'text-amber-400'} />
+                <span className="text-[8px] font-black leading-none">{group.code}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
       <div className="flex-1 overflow-y-auto py-2">
         <div className="px-3 py-2">
           <div className="flex items-center gap-2 text-[11px] font-black text-[#1E3A8A] px-2 py-1.5 rounded-lg bg-blue-50/60">
@@ -354,7 +450,8 @@ export default function UnitPage() {
             <div key={group.code} className="px-3">
               <button onClick={() => selectCat(group.code)}
                 className={clsx('w-full flex items-center gap-2 px-2 py-2 rounded-lg text-left transition-all group mb-0.5', isActive ? 'bg-[#1E3A8A] text-white' : 'hover:bg-slate-50 text-slate-600')}>
-                <span onClick={e => { e.stopPropagation(); toggleCat(group.code); }}>
+                <span role="button" aria-label={isExpanded ? 'Tutup folder' : 'Buka folder'} className="p-1 -m-1 rounded cursor-pointer hover:bg-black/10"
+                  onClick={e => { e.stopPropagation(); toggleCat(group.code); }}>
                   {isExpanded ? <ChevronDown size={11} className={clsx('flex-shrink-0', isActive ? 'text-white/70' : 'text-slate-400')} />
                               : <ChevronRight size={11} className={clsx('flex-shrink-0', isActive ? 'text-white/70' : 'text-slate-400')} />}
                 </span>
@@ -362,12 +459,12 @@ export default function UnitPage() {
                 <span className="text-[10px] font-black truncate leading-tight flex-1">{group.code} {group.name}</span>
                 <span className={clsx('text-[9px] font-black flex-shrink-0', isActive ? 'text-white/70' : catStatusColor(pct))}>{pct}%</span>
               </button>
-              {isExpanded && isActive && (
+              {isExpanded && (
                 <div className="ml-5 mb-1 space-y-0.5">
                   {group.items.map(item => (
-                    <button key={item.id} onClick={() => openDetail(item)}
+                    <button key={item.id} onClick={() => openItemView(item)}
                       className={clsx('w-full text-left px-2 py-1.5 rounded-lg text-[9px] font-bold truncate transition-all flex items-center gap-1.5',
-                        detailItem?.id === item.id ? 'bg-blue-100 text-[#1E3A8A]' : 'text-slate-500 hover:bg-slate-50')}>
+                        viewItemId === item.id ? 'bg-blue-100 text-[#1E3A8A]' : 'text-slate-500 hover:bg-slate-50')}>
                       {item.item_code}
                       {/* ✅ Badge deadline di sidebar */}
                       {item.deadline && (() => {
@@ -382,6 +479,7 @@ export default function UnitPage() {
           );
         })}
       </div>
+      )}
     </>
   );
 
@@ -397,29 +495,24 @@ export default function UnitPage() {
 
       {/* Modal Edit */}
       {editItem && (
-        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#E9ECEF] flex items-center justify-between">
-              <div><h3 className="text-sm font-black text-[#1A1C1E]">Edit Item Eviden</h3><p className="text-[10px] text-slate-400 mt-0.5">{editItem.item_code}</p></div>
-              <button onClick={() => setEditItem(null)} className="text-slate-300 hover:text-slate-500"><X size={18} /></button>
+        <Modal onClose={() => setEditItem(null)} locked={isSavingEdit} maxWidth="max-w-md"
+          title="Edit Item Eviden" subtitle={editItem.item_code}>
+          <div className="space-y-5">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Nama Dokumen</label>
+              <input autoFocus type="text" value={editNama} onChange={e => setEditNama(e.target.value)}
+                className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
             </div>
-            <div className="p-6 space-y-5">
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Nama Dokumen</label>
-                <input autoFocus type="text" value={editNama} onChange={e => setEditNama(e.target.value)}
-                  className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Format File</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {['PDF', 'JPEG', 'MP4', 'MPEG'].map(fmt => (
-                    <button key={fmt} type="button" onClick={() => setEditFormat(fmt)}
-                      className={clsx('py-2.5 rounded-xl text-[10px] font-black border transition-all', editFormat === fmt ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]' : 'bg-white text-slate-400 border-[#E9ECEF] hover:bg-slate-50')}>{fmt}</button>
-                  ))}
-                </div>
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Format File</label>
+              <div className="grid grid-cols-4 gap-2">
+                {['PDF', 'JPEG', 'MP4', 'MPEG'].map(fmt => (
+                  <button key={fmt} type="button" onClick={() => setEditFormat(fmt)}
+                    className={clsx('py-2.5 rounded-xl text-[10px] font-black border transition-all', editFormat === fmt ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]' : 'bg-white text-slate-400 border-[#E9ECEF] hover:bg-slate-50')}>{fmt}</button>
+                ))}
               </div>
             </div>
-            <div className="px-6 pb-6 flex gap-3">
+            <div className="flex gap-3 pt-1">
               <button onClick={() => setEditItem(null)} className="flex-1 py-3 rounded-xl border border-[#E9ECEF] text-xs font-black text-slate-400 hover:bg-slate-50">Batal</button>
               <button onClick={handleSaveEdit} disabled={isSavingEdit || !editNama.trim()}
                 className="flex-1 py-3 rounded-xl bg-[#1E3A8A] text-white text-xs font-black flex items-center justify-center gap-2 disabled:opacity-50">
@@ -427,54 +520,70 @@ export default function UnitPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {/* Modal Hapus */}
+      {/* Konfirmasi Hapus Item */}
       {deleteItem && (
-        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
-            <div className="p-6 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center mx-auto mb-4"><Trash2 size={24} className="text-red-500" /></div>
-              <h3 className="text-sm font-black text-[#1A1C1E] mb-1">Hapus Item?</h3>
-              <p className="text-[11px] text-slate-400 leading-relaxed"><span className="font-black text-slate-600">{deleteItem.nama_eviden}</span> akan dihapus permanen.</p>
+        <ConfirmDialog danger title="Hapus item?" confirmLabel="Hapus" cancelLabel="Batal"
+          message={<><span className="font-black text-slate-600">{deleteItem.nama_eviden}</span> akan dihapus permanen.</>}
+          onConfirm={() => handleDelete(deleteItem)} onCancel={() => setDeleteItem(null)} />
+      )}
+
+      {/* Konfirmasi Hapus File */}
+      {confirmDeleteFile && (
+        <ConfirmDialog danger title="Hapus file terupload?" confirmLabel="Hapus File" loading={isDeletingFile}
+          message={<>Semua file pada <span className="font-black text-slate-600">{confirmDeleteFile.nama_eviden}</span> akan dihapus dan status item kembali ke Kosong.</>}
+          onConfirm={async () => { await handleDeleteFile(confirmDeleteFile); setConfirmDeleteFile(null); }}
+          onCancel={() => setConfirmDeleteFile(null)} />
+      )}
+
+      {/* Konfirmasi Hapus Satu File */}
+      {confirmDelOne && (
+        <ConfirmDialog danger title="Hapus file ini?" confirmLabel="Hapus" loading={isDeletingOne}
+          message={<><span className="font-black text-slate-600">{fileNameOf(confirmDelOne.url)}</span> akan dihapus permanen dari {confirmDelOne.item.item_code}.</>}
+          onConfirm={() => handleDeleteOneFile(confirmDelOne.item, confirmDelOne.url)}
+          onCancel={() => setConfirmDelOne(null)} />
+      )}
+
+      {/* Pratinjau File */}
+      {previewUrl && (
+        <Modal onClose={() => setPreviewUrl(null)} maxWidth="max-w-4xl" title="Pratinjau File" subtitle={fileNameOf(previewUrl)}>
+          {fileKind(previewUrl) === 'image' ? (
+            <img src={previewUrl} alt={fileNameOf(previewUrl)} className="max-h-[70vh] w-auto mx-auto rounded-lg" />
+          ) : fileKind(previewUrl) === 'pdf' ? (
+            <iframe src={previewUrl} title="Pratinjau PDF" className="w-full h-[70vh] rounded-lg border border-[#E9ECEF]" />
+          ) : fileKind(previewUrl) === 'video' ? (
+            <video src={previewUrl} controls className="max-h-[70vh] w-full rounded-lg bg-black" />
+          ) : (
+            <div className="text-center py-10">
+              <p className="text-xs font-bold text-slate-500 mb-4">Jenis file ini tidak bisa dipratinjau di sini.</p>
+              <a href={downloadUrl(previewUrl)} download className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1E3A8A] text-white text-xs font-black"><Download size={14} /> Unduh File</a>
             </div>
-            <div className="px-6 pb-6 flex gap-3">
-              <button onClick={() => setDeleteItem(null)} className="flex-1 py-3 rounded-xl border border-[#E9ECEF] text-xs font-black text-slate-400 hover:bg-slate-50">Batal</button>
-              <button onClick={() => handleDelete(deleteItem)} className="flex-1 py-3 rounded-xl bg-red-500 text-white text-xs font-black flex items-center justify-center gap-2 hover:bg-red-600">
-                <Trash2 size={14} /> Hapus
-              </button>
-            </div>
-          </div>
-        </div>
+          )}
+        </Modal>
       )}
 
       {/* Modal Upload */}
-      {uploadItem && (
-        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#E9ECEF] flex items-center justify-between">
-              <div><h3 className="text-sm font-black text-[#1A1C1E]">Upload File Eviden</h3><p className="text-[10px] text-slate-400 mt-0.5">{uploadItem.item_code} · {uploadItem.format_req}</p></div>
-              <button onClick={() => setUploadItem(null)} className="text-slate-300 hover:text-slate-500"><X size={18} /></button>
-            </div>
-            <div className="p-6">
-              <FileUpload documentId={uploadItem.id} itemName={uploadItem.nama_eviden} requiredFormat={uploadItem.format_req}
-                kebutuhan_file={uploadItem.kebutuhan_file} uploaded_count={(uploadItem as any).uploaded_count ?? 0} file_urls={(uploadItem as any).file_urls ?? []}
-                status={uploadItem.status} onComplete={() => { fetchData(); setUploadItem(null); notify('File berhasil diunggah'); }} />
-            </div>
-          </div>
-        </div>
-      )}
+      {uploadItem && (() => {
+        const live = items.find(i => i.id === uploadItem.id) ?? uploadItem;
+        return (
+          <Modal onClose={() => setUploadItem(null)} locked={uploadBusy}
+            title="Upload File Eviden" subtitle={`${live.item_code} · ${live.format_req}`}>
+            <FileUpload documentId={live.id} itemName={live.nama_eviden} requiredFormat={live.format_req}
+              kebutuhan_file={live.kebutuhan_file} uploaded_count={(live as any).uploaded_count ?? 0} file_urls={(live as any).file_urls ?? []}
+              status={live.status} onBusyChange={setUploadBusy}
+              onDone={() => setUploadItem(null)}
+              onComplete={(a) => { fetchData(); notify(a === 'delete' ? 'File berhasil dihapus' : 'File berhasil diunggah'); }} />
+          </Modal>
+        );
+      })()}
 
       {/* Modal File Viewer */}
       {fileViewItem && (
-        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#E9ECEF] flex items-center justify-between">
-              <div><h3 className="text-sm font-black text-[#1A1C1E]">File Eviden</h3><p className="text-[10px] text-slate-400 mt-0.5">{fileViewItem.item_code} · {fileViewItem.format_req}</p></div>
-              <button onClick={() => { setFileViewItem(null); setShowReplaceUpload(false); }} className="text-slate-300 hover:text-slate-500"><X size={18} /></button>
-            </div>
-            <div className="p-6 space-y-4">
+        <Modal onClose={() => { setFileViewItem(null); setShowReplaceUpload(false); }} locked={isDeletingFile}
+          title="File Eviden" subtitle={`${fileViewItem.item_code} · ${fileViewItem.format_req}`}>
+            <div className="space-y-4">
               <div className="bg-[#F8F9FB] rounded-xl p-4 border border-[#E9ECEF]">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Nama Dokumen</p>
                 <p className="text-sm font-black text-[#1A1C1E]">{fileViewItem.nama_eviden}</p>
@@ -492,7 +601,7 @@ export default function UnitPage() {
                         <div className="w-9 h-9 rounded-lg bg-blue-50 group-hover:bg-blue-100 border border-blue-100 flex items-center justify-center"><ExternalLink size={16} className="text-[#1E3A8A]" /></div>
                         <p className="text-[10px] font-black text-slate-600 group-hover:text-[#1E3A8A]">Buka File</p>
                       </a>
-                      <a href={fileViewItem.file_url} download className="flex flex-col items-center gap-2 p-3.5 rounded-xl border border-[#E9ECEF] hover:bg-emerald-50 hover:border-emerald-200 transition-all group">
+                      <a href={downloadUrl(fileViewItem.file_url)} download className="flex flex-col items-center gap-2 p-3.5 rounded-xl border border-[#E9ECEF] hover:bg-emerald-50 hover:border-emerald-200 transition-all group">
                         <div className="w-9 h-9 rounded-lg bg-emerald-50 group-hover:bg-emerald-100 border border-emerald-100 flex items-center justify-center"><Download size={16} className="text-emerald-600" /></div>
                         <p className="text-[10px] font-black text-slate-600 group-hover:text-emerald-700">Unduh File</p>
                       </a>
@@ -509,13 +618,13 @@ export default function UnitPage() {
                       </div>
                       <FileUpload documentId={fileViewItem.id} itemName={fileViewItem.nama_eviden} requiredFormat={fileViewItem.format_req}
                         kebutuhan_file={fileViewItem.kebutuhan_file} uploaded_count={(fileViewItem as any).uploaded_count ?? 0} file_urls={(fileViewItem as any).file_urls ?? []}
-                        status={fileViewItem.status} onComplete={() => { fetchData(); setFileViewItem(null); setShowReplaceUpload(false); notify('File berhasil diganti'); }} />
+                        status={fileViewItem.status} onComplete={(a) => { fetchData(); setFileViewItem(null); setShowReplaceUpload(false); notify(a === 'delete' ? 'File berhasil dihapus' : 'File berhasil diganti'); }} />
                     </div>
                   )}
                   {!showReplaceUpload && (
                     <div className="border-t border-[#F1F3F5] pt-4">
                       <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Zona Berbahaya</p>
-                      <button onClick={() => handleDeleteFile(fileViewItem)} disabled={isDeletingFile}
+                      <button onClick={() => setConfirmDeleteFile(fileViewItem)} disabled={isDeletingFile}
                         className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-red-200 text-[10px] font-black text-red-500 hover:bg-red-50 transition-all disabled:opacity-50">
                         {isDeletingFile ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Hapus File Terupload
                       </button>
@@ -531,51 +640,45 @@ export default function UnitPage() {
                   </div>
                   <FileUpload documentId={fileViewItem.id} itemName={fileViewItem.nama_eviden} requiredFormat={fileViewItem.format_req}
                     kebutuhan_file={fileViewItem.kebutuhan_file} uploaded_count={(fileViewItem as any).uploaded_count ?? 0} file_urls={(fileViewItem as any).file_urls ?? []}
-                    status={fileViewItem.status} onComplete={() => { fetchData(); setFileViewItem(null); notify('File berhasil diunggah'); }} />
+                    status={fileViewItem.status} onComplete={(a) => { fetchData(); setFileViewItem(null); notify(a === 'delete' ? 'File berhasil dihapus' : 'File berhasil diunggah'); }} />
                 </div>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal Buat Folder */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#E9ECEF] flex items-center justify-between">
-              <div><h3 className="text-sm font-black text-[#1A1C1E]">Buat Folder Baru</h3><p className="text-[10px] text-slate-400 mt-0.5">{selectedCatCode} {currentGroup?.name} · {unitId === 'UP' ? 'Unit Pengolah' : 'Unit Kearsipan'}</p></div>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-300 hover:text-slate-500"><X size={18} /></button>
+        <Modal onClose={() => setShowAddModal(false)} locked={isSavingAdd} maxWidth="max-w-md"
+          title="Buat Folder Baru" subtitle={`${selectedCatCode} ${currentGroup?.name ?? ''} · ${unitId === 'UP' ? 'Unit Pengolah' : 'Unit Kearsipan'}`}>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Nama Dokumen Eviden</label>
+              <input autoFocus type="text" value={addNama} onChange={e => setAddNama(e.target.value)} placeholder="Contoh: Berita Acara Rapat..."
+                className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
             </div>
-            <div className="p-6 space-y-4">
+            <div>
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Format File</label>
+              <div className="grid grid-cols-4 gap-2">
+                {['PDF', 'JPEG', 'MP4', 'MPEG'].map(fmt => (
+                  <button key={fmt} type="button" onClick={() => setAddFormat(fmt)}
+                    className={clsx('py-2 rounded-xl text-[10px] font-black border transition-all', addFormat === fmt ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]' : 'bg-white text-slate-400 border-[#E9ECEF] hover:bg-slate-50')}>{fmt}</button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Nama Dokumen Eviden</label>
-                <input autoFocus type="text" value={addNama} onChange={e => setAddNama(e.target.value)} placeholder="Contoh: Berita Acara Rapat..."
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Jumlah File</label>
+                <input type="number" min={1} value={addJumlah} onChange={e => setAddJumlah(Number(e.target.value))}
                   className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
               </div>
               <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Format File</label>
-                <div className="grid grid-cols-4 gap-2">
-                  {['PDF', 'JPEG', 'MP4', 'MPEG'].map(fmt => (
-                    <button key={fmt} type="button" onClick={() => setAddFormat(fmt)}
-                      className={clsx('py-2 rounded-xl text-[10px] font-black border transition-all', addFormat === fmt ? 'bg-[#1E3A8A] text-white border-[#1E3A8A]' : 'bg-white text-slate-400 border-[#E9ECEF] hover:bg-slate-50')}>{fmt}</button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Jumlah File</label>
-                  <input type="number" min={1} value={addJumlah} onChange={e => setAddJumlah(Number(e.target.value))}
-                    className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Tahun</label>
-                  <input type="text" value={addTahun} onChange={e => setAddTahun(e.target.value)} placeholder="2025 / 2024-2025"
-                    className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
-                </div>
+                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Tahun</label>
+                <input type="text" value={addTahun} onChange={e => setAddTahun(e.target.value)} placeholder="2025 / 2024-2025"
+                  className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
               </div>
             </div>
-            <div className="px-6 pb-6 flex gap-3">
+            <div className="flex gap-3 pt-1">
               <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 rounded-xl border border-[#E9ECEF] text-xs font-black text-slate-400 hover:bg-slate-50">Batal</button>
               <button onClick={handleAddFolder} disabled={isSavingAdd || !addNama.trim()}
                 className="flex-1 py-3 rounded-xl bg-[#1E3A8A] text-white text-xs font-black flex items-center justify-center gap-2 disabled:opacity-50">
@@ -583,7 +686,7 @@ export default function UnitPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Mobile Sidebar */}
@@ -618,27 +721,90 @@ export default function UnitPage() {
         </div>
       </div>
 
+      {/* Pencarian & Filter (di bawah header, mencakup seluruh unit) */}
+      <div className="bg-white rounded-2xl border border-[#E9ECEF] shadow-sm px-4 py-3 mb-4 flex flex-col sm:flex-row sm:flex-wrap xl:flex-nowrap sm:items-center gap-3">
+        <div className="relative flex-1 min-w-0 sm:min-w-[16rem]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
+          <input type="text" placeholder="Cari nama atau kode item eviden di seluruh unit..." value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl py-2.5 pl-9 pr-9 text-xs font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} aria-label="Hapus pencarian"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"><X size={14} /></button>
+          )}
+        </div>
+        <div className="relative flex-shrink-0 xl:w-44">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)} aria-label="Filter status"
+            className={clsx('w-full appearance-none bg-[#F8F9FB] border rounded-xl py-2.5 pl-3.5 pr-9 text-xs font-bold outline-none cursor-pointer focus:ring-2 focus:ring-[#1E3A8A]/10',
+              statusFilter !== 'all' ? 'border-[#1E3A8A]/40 text-[#1E3A8A]' : 'border-[#E9ECEF] text-slate-500')}>
+            <option value="all">Semua Status</option>
+            <option value="missing">Kosong</option>
+            <option value="partial">Belum Lengkap</option>
+            <option value="done">Lengkap</option>
+          </select>
+          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+        <div className="relative flex-shrink-0 xl:w-40">
+          <select value={formatFilter} onChange={e => setFormatFilter(e.target.value as typeof formatFilter)} aria-label="Filter format"
+            className={clsx('w-full appearance-none bg-[#F8F9FB] border rounded-xl py-2.5 pl-3.5 pr-9 text-xs font-bold outline-none cursor-pointer focus:ring-2 focus:ring-[#1E3A8A]/10',
+              formatFilter !== 'all' ? 'border-[#1E3A8A]/40 text-[#1E3A8A]' : 'border-[#E9ECEF] text-slate-500')}>
+            <option value="all">Semua Format</option>
+            <option value="PDF">PDF</option>
+            <option value="JPEG">JPEG</option>
+            <option value="Excel">Excel</option>
+            <option value="Video">Video</option>
+          </select>
+          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        </div>
+        {isFiltering && (
+          <button onClick={resetFilters}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black text-rose-500 border border-rose-200 bg-rose-50 hover:bg-rose-100 transition-all flex-shrink-0">
+            <X size={12} /> Reset
+          </button>
+        )}
+      </div>
+
       {/* 3-column layout */}
       <div className="flex gap-4 flex-1 min-h-0">
 
         {/* Sidebar */}
-        <div className="hidden lg:flex w-56 flex-shrink-0 bg-white rounded-2xl border border-[#E9ECEF] shadow-sm overflow-hidden flex-col">
-          <SidebarContent />
+        <div className={clsx('hidden lg:flex flex-shrink-0 bg-white rounded-2xl border border-[#E9ECEF] shadow-sm overflow-hidden flex-col transition-all duration-300',
+          treeCollapsed ? 'w-14' : 'w-52 2xl:w-56')}>
+          <SidebarContent compact={treeCollapsed} />
         </div>
 
         {/* Main table */}
         <div className={clsx('flex-1 min-w-0 flex flex-col gap-3', mobileView === 'detail' ? 'hidden lg:flex' : 'flex')}>
-          {currentGroup && (
+          {viewItem ? (
+            <ItemDetailView
+              item={viewItem}
+              categoryLabel={`${viewItem.category_code} ${CATEGORIES.find(c => c.code === viewItem.category_code)?.label ?? ''}`}
+              unitLabel={unitLabel}
+              position={viewSiblings.findIndex(i => i.id === viewItem.id) + 1}
+              total={viewSiblings.length}
+              onPrev={() => { const i = viewSiblings.findIndex(x => x.id === viewItem.id); if (i > 0) openItemView(viewSiblings[i - 1]); }}
+              onNext={() => { const i = viewSiblings.findIndex(x => x.id === viewItem.id); if (i < viewSiblings.length - 1) openItemView(viewSiblings[i + 1]); }}
+              onBack={() => setViewItemId(null)}
+              onUpload={() => openUpload(viewItem)}
+              onEdit={() => { setEditItem(viewItem); setEditNama(viewItem.nama_eviden); setEditFormat(viewItem.format_req.split(' ')[0]); }}
+              onDeleteItem={() => setDeleteItem(viewItem)}
+              onDeleteAllFiles={() => setConfirmDeleteFile(viewItem)}
+              onDeleteFile={url => setConfirmDelOne({ item: viewItem, url })}
+              onPreview={setPreviewUrl}
+              downloadUrl={downloadUrl}
+            />
+          ) : (<>
+          {currentGroup && !isFiltering && (
             <div className="bg-white rounded-2xl border border-[#E9ECEF] shadow-sm px-5 py-4">
-              <div className="flex items-center justify-between gap-4 mb-4">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-col 2xl:flex-row 2xl:items-center 2xl:justify-between gap-3 2xl:gap-4 mb-4">
+                <div className="flex items-center gap-3 min-w-0">
                   <div className="w-10 h-10 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-center flex-shrink-0"><FolderOpen size={18} className="text-amber-500" /></div>
                   <div>
                     <h2 className="text-sm font-black text-[#1A1C1E] uppercase tracking-wide">{currentGroup.code} {currentGroup.name}</h2>
                     <p className="text-[10px] text-slate-400 font-medium">Dokumen yang berkaitan dengan {currentGroup.name.toLowerCase()}.</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="grid grid-cols-4 gap-2 2xl:flex 2xl:flex-shrink-0 2xl:items-center">
                   <StatPill label="Total" value={catStats.total} color="slate" />
                   <StatPill label="Selesai" value={catStats.done} color="green" />
                   <StatPill label="Belum" value={catStats.partial} color="amber" />
@@ -646,11 +812,6 @@ export default function UnitPage() {
                 </div>
               </div>
               <div className="flex items-center gap-4">
-                <div className="relative w-64 flex-shrink-0">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={13} />
-                  <input type="text" placeholder="Cari item eviden..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                    className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl py-2 pl-9 pr-4 text-xs font-bold focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none" />
-                </div>
                 <div className="flex-1 flex items-center gap-3">
                   <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden border border-[#E9ECEF]">
                     <div className={clsx('h-full rounded-full transition-all duration-700',
@@ -659,35 +820,38 @@ export default function UnitPage() {
                   </div>
                   <span className="text-sm font-black text-[#1E3A8A] flex-shrink-0">{catStats.total > 0 ? Math.round((catStats.done/catStats.total)*100) : 0}%</span>
                 </div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex-shrink-0">{filteredItems.length}/{currentGroup.items.length} item</span>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex-shrink-0">{currentGroup.items.length} item</span>
               </div>
             </div>
           )}
 
           <div className="flex-1 bg-white rounded-2xl border border-[#E9ECEF] shadow-sm overflow-hidden flex flex-col">
-            <div className="px-5 py-3 border-b border-[#E9ECEF] flex items-center justify-between bg-white">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filteredItems.length} item · {selectedCatCode} {currentGroup?.name}</p>
+            <div className="px-5 py-3 border-b border-[#E9ECEF] flex flex-wrap items-center justify-between gap-2 bg-white">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filteredItems.length} item · {isFiltering ? `Hasil pencarian — seluruh ${unitLabel}` : `${selectedCatCode} ${currentGroup?.name ?? ''}`}</p>
               <div className="flex items-center gap-2">
                 <button onClick={() => setInlineEditId(inlineEditId !== null ? null : -1)}
-                  className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black border transition-all',
+                  className={clsx('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black border transition-all whitespace-nowrap',
                     inlineEditId !== null ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-[#E9ECEF] text-slate-500 hover:bg-slate-50')}>
                   <Pencil size={12} />{inlineEditId !== null ? 'Selesai Edit' : 'Edit Format'}
                 </button>
                 <button onClick={() => setShowAddModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black bg-[#1E3A8A] text-white border border-[#1E3A8A] hover:bg-[#1E3A8A]/90 transition-all">
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black bg-[#1E3A8A] text-white border border-[#1E3A8A] hover:bg-[#1E3A8A]/90 transition-all whitespace-nowrap">
                   <Plus size={12} /> Buat Folder
                 </button>
               </div>
             </div>
             <div className="overflow-x-auto flex-1 flex flex-col">
-              <table className="w-full text-left table-fixed">
+              <table className={clsx('w-full text-left table-fixed', inlineEditId !== null ? 'min-w-[640px]' : 'min-w-[400px] 2xl:min-w-[640px]')}>
                 <colgroup>
-                  <col className="w-[38%]" /><col className="w-[12%]" /><col className="w-[13%]" />
-                  <col className="w-[17%]" /><col className="w-[20%]" />
+                  <col className={inlineEditId !== null ? 'w-[30%]' : 'w-[48%] 2xl:w-[38%]'} />
+                  <col className={inlineEditId !== null ? 'w-[18%]' : 'hidden 2xl:table-column w-[12%]'} />
+                  <col className={inlineEditId !== null ? 'w-[17%]' : 'hidden 2xl:table-column w-[13%]'} />
+                  <col className={inlineEditId !== null ? 'w-[16%]' : 'w-[22%] 2xl:w-[17%]'} />
+                  <col className={inlineEditId !== null ? 'w-[19%]' : 'w-[30%] 2xl:w-[20%]'} />
                 </colgroup>
                 <thead className="border-b border-[#E9ECEF] bg-slate-50/60">
                   <tr>{['Nama Item Eviden','Format','Kebutuhan','Status','Aksi'].map((h,i) => (
-                    <th key={i} className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest first:pl-5">{h}</th>
+                    <th key={i} className={clsx('px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest first:pl-5', (i === 1 || i === 2) && inlineEditId === null && 'hidden 2xl:table-cell')}>{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody className="divide-y divide-[#F1F3F5]">
@@ -703,7 +867,7 @@ export default function UnitPage() {
                       return { diff, isPast: diff < 0, isUrgent: diff <= 3 };
                     })() : null;
                     return (
-                      <tr key={item.id} onClick={() => openDetail(item)}
+                      <tr key={item.id} onClick={() => openDetail(item)} onDoubleClick={() => openItemView(item)}
                         className={clsx('hover:bg-[#F8F9FB] transition-colors cursor-pointer group', detailItem?.id === item.id && 'bg-blue-50/60')}>
                         <td className="px-4 py-3 pl-5">
                           <div className="flex items-center gap-3 min-w-0">
@@ -711,11 +875,11 @@ export default function UnitPage() {
                             <div className="w-7 h-7 rounded-lg border border-[#E9ECEF] bg-white flex items-center justify-center flex-shrink-0"><FormatIcon fmt={item.format_req} /></div>
                             <div className="min-w-0">
                               <p className="text-[11px] font-black text-[#1A1C1E] truncate">{item.nama_eviden}</p>
-                              <p className="text-[9px] text-slate-400 font-medium">{item.tahun ?? '-'}</p>
+                              <p className="text-[9px] text-slate-400 font-medium truncate">{isFiltering ? `${item.category_code} ${CATEGORIES.find(c => c.code === item.category_code)?.label ?? ''} · ` : ''}{item.tahun ?? '-'}{inlineEditId === null && <span className="2xl:hidden"> · {item.format_req} · {item.kebutuhan_file} file</span>}</p>
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3" onClick={e => inlineEditId !== null && e.stopPropagation()}>
+                        <td className={clsx('px-4 py-3', inlineEditId === null && 'hidden 2xl:table-cell')} onClick={e => inlineEditId !== null && e.stopPropagation()}>
                           {inlineEditId === item.id ? (
                             <select value={inlineFormat} onChange={e => setInlineFormat(e.target.value)}
                               className="w-full bg-[#F8F9FB] border border-amber-200 rounded-lg px-2 py-1 text-[10px] font-black outline-none">
@@ -723,11 +887,11 @@ export default function UnitPage() {
                             </select>
                           ) : <FormatBadge fmt={item.format_req} />}
                         </td>
-                        <td className="px-4 py-3" onClick={e => inlineEditId !== null && e.stopPropagation()}>
+                        <td className={clsx('px-4 py-3', inlineEditId === null && 'hidden 2xl:table-cell')} onClick={e => inlineEditId !== null && e.stopPropagation()}>
                           {inlineEditId === item.id ? (
                             <input type="number" min={1} value={inlineJumlah} onChange={e => setInlineJumlah(Number(e.target.value))}
                               className="w-16 bg-[#F8F9FB] border border-amber-200 rounded-lg px-2 py-1 text-[10px] font-black outline-none" />
-                          ) : <span className="text-[11px] font-black text-slate-500">{item.kebutuhan_file} file</span>}
+                          ) : <span className="text-[11px] font-black text-slate-500 whitespace-nowrap">{item.kebutuhan_file} file</span>}
                         </td>
                         {/* ✅ Status + deadline badge */}
                         <td className="px-4 py-3">
@@ -778,13 +942,14 @@ export default function UnitPage() {
               </table>
             </div>
             <div className="px-5 py-3 border-t border-[#F1F3F5]">
-              <p className="text-[10px] font-bold text-slate-400">Menampilkan {filteredItems.length} dari {currentGroup?.items.length ?? 0} item</p>
+              <p className="text-[10px] font-bold text-slate-400">Menampilkan {filteredItems.length} dari {baseItems.length} item</p>
             </div>
           </div>
+          </>)}
         </div>
 
         {/* ── Panel Kanan ──────────────────────────────────────────────────── */}
-        <div className={clsx('flex-col gap-4', 'lg:flex lg:w-72 lg:flex-shrink-0', mobileView === 'detail' ? 'flex w-full' : 'hidden lg:flex')}>
+        <div className={clsx('flex-col gap-4 lg:w-64 2xl:w-72 lg:flex-shrink-0', mobileView === 'detail' ? 'flex w-full lg:w-64 2xl:w-72' : 'hidden lg:flex')}>
           {mobileView === 'detail' && (
             <button onClick={() => { setMobileView('table'); setDetailItem(null); }}
               className="lg:hidden flex items-center gap-2 text-xs font-black text-slate-500 bg-white border border-[#E9ECEF] px-4 py-2.5 rounded-xl shadow-sm self-start">
@@ -1032,7 +1197,7 @@ function StatPill({ label, value, color }: { label: string; value: number; color
     red:   'text-red-600 bg-red-50 border-red-200',
   };
   return (
-    <div className={clsx('text-center px-2.5 py-1.5 rounded-xl border', colors[color])}>
+    <div className={clsx('text-center px-2.5 py-1.5 rounded-xl border min-w-0', colors[color])}>
       <p className="text-sm font-black">{value}</p>
       <p className="text-[8px] font-black uppercase tracking-widest opacity-70">{label}</p>
     </div>
@@ -1043,6 +1208,159 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div>
       <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-0.5">{label}</p>
       <p className="text-[11px] font-bold text-[#1A1C1E] leading-relaxed">{value}</p>
+    </div>
+  );
+}
+
+// ── Helper file ──────────────────────────────────────────────────────────────
+function fileNameOf(url: string) {
+  try { return decodeURIComponent(url.split('?')[0].split('/').pop() || 'file'); } catch { return url.split('/').pop() || 'file'; }
+}
+function fileKind(url: string): 'image' | 'pdf' | 'video' | 'sheet' | 'other' {
+  const ext = fileNameOf(url).split('.').pop()?.toLowerCase() ?? '';
+  if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return 'image';
+  if (ext === 'pdf') return 'pdf';
+  if (['mp4', 'mpeg', 'mpg', 'mov', 'webm'].includes(ext)) return 'video';
+  if (['xlsx', 'xls', 'csv'].includes(ext)) return 'sheet';
+  return 'other';
+}
+function KindIcon({ url, size = 18 }: { url: string; size?: number }) {
+  const k = fileKind(url);
+  if (k === 'image') return <ImageIcon size={size} className="text-blue-500" />;
+  if (k === 'pdf')   return <FileText size={size} className="text-red-500" />;
+  if (k === 'video') return <Film size={size} className="text-purple-500" />;
+  if (k === 'sheet') return <FileSpreadsheet size={size} className="text-green-600" />;
+  return <FileIcon size={size} className="text-slate-400" />;
+}
+
+// ── Tampilan detail item (panel tengah) ─────────────────────────────────────
+interface ItemDetailViewProps {
+  item: AuditDocument;
+  categoryLabel: string;
+  unitLabel: string;
+  position: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onBack: () => void;
+  onUpload: () => void;
+  onEdit: () => void;
+  onDeleteItem: () => void;
+  onDeleteAllFiles: () => void;
+  onDeleteFile: (url: string) => void;
+  onPreview: (url: string) => void;
+  downloadUrl: (url: string) => string;
+}
+
+function ItemDetailView(p: ItemDetailViewProps) {
+  const { item } = p;
+  const urls: string[] = item.file_urls?.length ? item.file_urls : item.file_url ? [item.file_url] : [];
+  const need = Math.max(item.kebutuhan_file, urls.length);
+  const emptySlots = Math.max(0, item.kebutuhan_file - urls.length);
+  const st = getStatusInfo(item.status);
+  const dl = getDeadlineInfo(item.deadline);
+  const pct = item.kebutuhan_file > 0 ? Math.min(100, Math.round((urls.length / item.kebutuhan_file) * 100)) : 0;
+  const iconBtn = 'w-8 h-8 flex items-center justify-center rounded-lg border border-[#E9ECEF] text-slate-400 transition-colors';
+
+  return (
+    <div className="flex-1 bg-white rounded-2xl border border-[#E9ECEF] shadow-sm overflow-hidden flex flex-col min-h-0">
+      {/* Bar atas: breadcrumb + navigasi */}
+      <div className="px-5 py-3 border-b border-[#E9ECEF] flex flex-wrap items-center justify-between gap-2">
+        <button onClick={p.onBack} className="flex items-center gap-1.5 text-[10px] font-black text-slate-500 hover:text-[#1E3A8A] transition-colors min-w-0">
+          <ArrowLeft size={13} className="flex-shrink-0" />
+          <span className="truncate">Kembali ke daftar · {p.categoryLabel}</span>
+        </button>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-black text-slate-400 mr-1">{p.position} / {p.total}</span>
+          <button onClick={p.onPrev} disabled={p.position <= 1} aria-label="Item sebelumnya" title="Item sebelumnya"
+            className={clsx(iconBtn, 'hover:text-[#1E3A8A] hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none')}><ChevronLeft size={15} /></button>
+          <button onClick={p.onNext} disabled={p.position >= p.total} aria-label="Item berikutnya" title="Item berikutnya"
+            className={clsx(iconBtn, 'hover:text-[#1E3A8A] hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none')}><ChevronRight size={15} /></button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        {/* Judul item */}
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-xl border border-[#E9ECEF] bg-[#F8F9FB] flex items-center justify-center flex-shrink-0"><FormatIcon fmt={item.format_req} /></div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{item.item_code}</p>
+            <h2 className="text-base font-black text-[#1A1C1E] leading-snug mt-0.5">{item.nama_eviden}</h2>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <span className={clsx('text-[9px] font-black px-2.5 py-1 rounded-lg border', st.color)}>{st.label}</span>
+              <FormatBadge fmt={item.format_req} />
+              {item.tahun && <span className="text-[9px] font-black px-2 py-0.5 rounded border border-[#E9ECEF] text-slate-500 bg-white">Tahun {item.tahun}</span>}
+              {dl && <span className={clsx('text-[9px] font-black px-2 py-0.5 rounded border flex items-center gap-1', dl.color)}><Clock size={10} />{dl.label}</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Aksi utama */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={p.onUpload}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#1E3A8A] text-white text-[11px] font-black hover:bg-[#1E3A8A]/90 transition-all">
+            <Upload size={13} /> {urls.length > 0 ? 'Tambah / Ganti File' : 'Upload File'}
+          </button>
+          <button onClick={p.onEdit}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#E9ECEF] text-[11px] font-black text-slate-500 hover:bg-slate-50 transition-all">
+            <Pencil size={13} /> Edit Item
+          </button>
+          {urls.length > 0 && (
+            <button onClick={p.onDeleteAllFiles}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-red-200 text-[11px] font-black text-red-500 hover:bg-red-50 transition-all">
+              <Trash2 size={13} /> Hapus Semua File
+            </button>
+          )}
+          <button onClick={p.onDeleteItem}
+            className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black text-slate-400 hover:text-red-600 hover:bg-red-50 transition-all">
+            <Trash2 size={13} /> Hapus Item
+          </button>
+        </div>
+
+        {/* Progres */}
+        <div className="bg-[#F8F9FB] rounded-xl border border-[#E9ECEF] px-4 py-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kelengkapan File</p>
+            <p className="text-[11px] font-black text-[#1E3A8A]">{urls.length} / {item.kebutuhan_file} file · {pct}%</p>
+          </div>
+          <div className="h-2 bg-white rounded-full overflow-hidden border border-[#E9ECEF]">
+            <div className={clsx('h-full rounded-full transition-all duration-500', item.status === 'done' ? 'bg-emerald-500' : item.status === 'partial' ? 'bg-amber-400' : 'bg-slate-200')} style={{ width: `${pct}%` }} />
+          </div>
+          {item.updated_at && <p className="text-[9px] text-slate-400 font-medium mt-2">Terakhir diperbarui {new Date(item.updated_at).toLocaleString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>}
+        </div>
+
+        {/* Daftar file */}
+        <div>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2.5">Daftar File ({urls.length})</p>
+          <div className="space-y-2">
+            {urls.map((url, i) => (
+              <div key={url} className="flex items-center gap-3 px-3.5 py-3 rounded-xl border border-[#E9ECEF] hover:border-[#1E3A8A]/20 hover:bg-[#F8F9FB]/60 transition-all">
+                <span className="text-[10px] font-black text-slate-300 w-4 text-right flex-shrink-0">{i + 1}</span>
+                <div className="w-9 h-9 rounded-lg bg-white border border-[#E9ECEF] flex items-center justify-center flex-shrink-0"><KindIcon url={url} /></div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-black text-[#1A1C1E] truncate">{fileNameOf(url)}</p>
+                  <p className="text-[9px] text-slate-400 font-medium uppercase">{fileNameOf(url).split('.').pop()}</p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button onClick={() => p.onPreview(url)} title="Pratinjau" aria-label="Pratinjau" className={clsx(iconBtn, 'hover:text-[#1E3A8A] hover:bg-blue-50 hover:border-blue-200')}><Eye size={14} /></button>
+                  <a href={url} target="_blank" rel="noopener noreferrer" title="Buka di tab baru" aria-label="Buka di tab baru" className={clsx(iconBtn, 'hover:text-[#1E3A8A] hover:bg-blue-50 hover:border-blue-200')}><ExternalLink size={14} /></a>
+                  <a href={p.downloadUrl(url)} download title="Unduh" aria-label="Unduh" className={clsx(iconBtn, 'hover:text-emerald-600 hover:bg-emerald-50 hover:border-emerald-200')}><Download size={14} /></a>
+                  <button onClick={() => p.onDeleteFile(url)} title="Hapus file" aria-label="Hapus file" className={clsx(iconBtn, 'hover:text-red-500 hover:bg-red-50 hover:border-red-200')}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            ))}
+            {Array.from({ length: emptySlots }).map((_, i) => (
+              <button key={`slot-${i}`} onClick={p.onUpload}
+                className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border border-dashed border-slate-200 text-slate-400 hover:border-[#1E3A8A]/40 hover:text-[#1E3A8A] hover:bg-blue-50/40 transition-all text-left">
+                <span className="text-[10px] font-black w-4 text-right flex-shrink-0">{urls.length + i + 1}</span>
+                <div className="w-9 h-9 rounded-lg border border-dashed border-slate-200 flex items-center justify-center flex-shrink-0"><Plus size={15} /></div>
+                <p className="text-[11px] font-bold">File belum diunggah · klik untuk upload</p>
+              </button>
+            ))}
+            {need === 0 && <p className="text-[11px] text-slate-400 font-medium">Belum ada file.</p>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

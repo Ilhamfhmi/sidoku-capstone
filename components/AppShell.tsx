@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+import Image from 'next/image';
 import { Search, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { clsx } from 'clsx';
 import SidebarNav from '@/components/SidebarNav';
@@ -62,34 +64,38 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* Sidebar */}
       <aside
         className={clsx(
-          'fixed inset-y-0 left-0 z-50 w-72 bg-white border-r border-[#E9ECEF] flex flex-col',
+          'fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-[#E9ECEF] flex flex-col',
           'transition-all duration-300 ease-in-out',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           'lg:translate-x-0',
-          collapsed ? 'lg:w-20' : 'lg:w-72'
+          collapsed ? 'lg:w-20' : 'lg:w-64'
         )}
       >
         {/* Logo */}
         <div
           className={clsx(
-            'p-8 flex items-center justify-between',
+            'px-5 py-5 flex items-center justify-between',
             collapsed && 'lg:px-0 lg:justify-center'
           )}
         >
-          <div className="flex flex-col">
-            <span className="text-2xl font-black text-[#1E3A8A] tracking-tighter leading-none">
-              <span className={clsx(collapsed && 'lg:hidden')}>SIDOKU</span>
-              {collapsed && <span className="hidden lg:inline">S</span>}
-            </span>
-            <span
-              className={clsx(
-                'text-[10px] font-black text-slate-300 uppercase tracking-[0.2em] mt-1.5',
-                collapsed && 'lg:hidden'
-              )}
-            >
-              Administrasi Kecamatan
-            </span>
-          </div>
+          <Link href="/" className="flex items-center gap-3 min-w-0">
+            <Image
+              src="/asset/Lambang_Kota_Bandung.webp"
+              alt="Lambang Kota Bandung"
+              width={47}
+              height={40}
+              priority
+              className="h-10 w-auto flex-shrink-0 object-contain"
+            />
+            <div className={clsx('flex flex-col', collapsed && 'lg:hidden')}>
+              <span className="text-xl font-black text-[#1E3A8A] tracking-tighter leading-none">
+                SIDOKU
+              </span>
+              <span className="text-[9px] font-black text-slate-300 uppercase tracking-[0.14em] mt-1.5 whitespace-nowrap">
+                Administrasi Kecamatan
+              </span>
+            </div>
+          </Link>
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
@@ -105,7 +111,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Keluar */}
         <div
           className={clsx(
-            'p-6 border-t border-[#E9ECEF]',
+            'px-5 py-4 border-t border-[#E9ECEF]',
             collapsed && 'lg:px-0 lg:flex lg:justify-center'
           )}
         >
@@ -117,11 +123,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div
         className={clsx(
           'flex-1 min-w-0 flex flex-col min-h-screen transition-all duration-300 ease-in-out',
-          collapsed ? 'lg:ml-20' : 'lg:ml-72'
+          collapsed ? 'lg:ml-20' : 'lg:ml-64'
         )}
       >
         {/* Header */}
-        <header className="h-16 lg:h-20 bg-white border-b border-[#E9ECEF] sticky top-0 z-30 px-4 lg:px-10 flex items-center justify-between gap-4">
+        <header className="h-14 lg:h-16 bg-white border-b border-[#E9ECEF] sticky top-0 z-30 px-4 lg:px-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             {/* Hamburger (mobile) */}
             <button
@@ -139,9 +145,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               onClick={toggleCollapsed}
               aria-label={collapsed ? 'Perluas sidebar' : 'Ciutkan sidebar'}
               title={collapsed ? 'Perluas sidebar' : 'Ciutkan sidebar'}
-              className="hidden lg:flex flex-shrink-0 w-10 h-10 items-center justify-center rounded-xl text-slate-400 hover:text-[#1E3A8A] hover:bg-[#F8F9FB] transition-colors"
+              className="hidden lg:flex flex-shrink-0 w-9 h-9 items-center justify-center rounded-lg text-slate-400 hover:text-[#1E3A8A] hover:bg-[#F8F9FB] transition-colors"
             >
-              {collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+              {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
 
             {/* Search */}
@@ -149,12 +155,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <div className="relative">
                 <Search
                   className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"
-                  size={17}
+                  size={15}
                 />
                 <input
                   type="text"
                   placeholder="Cari dokumen, item, atau folder..."
-                  className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-xl py-2.5 pl-11 pr-4 text-sm font-medium placeholder:text-slate-300 focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none"
+                  className="w-full bg-[#F8F9FB] border border-[#E9ECEF] rounded-lg py-2 pl-10 pr-4 text-[13px] font-medium placeholder:text-slate-300 focus:ring-2 focus:ring-[#1E3A8A]/10 outline-none"
                 />
               </div>
             </div>
@@ -164,7 +170,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Konten */}
-        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-10">{children}</main>
+        <main className="flex-1 min-w-0 p-4 sm:p-5 lg:p-6">{children}</main>
       </div>
     </div>
   );
