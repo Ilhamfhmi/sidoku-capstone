@@ -2,13 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Database, Archive } from 'lucide-react';
+import { Home, Database, Archive, Bell, TrendingUp } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const NAV = [
-  { href: '/',          icon: <Home     size={18} />, label: 'Beranda'        },
-  { href: '/unit/UP',   icon: <Database size={18} />, label: 'Unit Pengolah'  },
-  { href: '/unit/UK',   icon: <Archive  size={18} />, label: 'Unit Kearsipan' },
+  { href: '/',           icon: <Home        size={18} />, label: 'Beranda'        },
+  { href: '/unit/UP',    icon: <Database    size={18} />, label: 'Unit Pengolah'  },
+  { href: '/unit/UK',    icon: <Archive     size={18} />, label: 'Unit Kearsipan' },
+  { href: '/notifikasi', icon: <Bell        size={18} />, label: 'Deadline Audit' },
+  { href: '/skor',       icon: <TrendingUp  size={18} />, label: 'Skor Kesiapan'  },
 ];
 
 export default function SidebarNav({ collapsed = false }: { collapsed?: boolean }) {

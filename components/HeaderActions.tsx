@@ -18,6 +18,12 @@ interface Notif {
 }
 type SettingsTab = 'profil' | 'keamanan' | 'backup' | 'bantuan' | null;
 
+// ── Deadline alert type ───────────────────────────────────────────────────
+type DeadlineAlert = {
+  unit_id: string; unit_kode: string; unit_nama: string
+  urgency: string; days_remaining: number | null; target_date: string | null
+}
+
 function NotifIcon({ type }: { type: string }) {
   if (type === 'success') return <CheckCircle2 size={15} className="text-emerald-500" />;
   if (type === 'warning') return <AlertTriangle size={15} className="text-amber-500" />;
@@ -49,14 +55,28 @@ export default function HeaderActions() {
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState('');
 
-  // ── Notifikasi ────────────────────────────────────────────────────────────
+  // ── Notifikasi (statis) ───────────────────────────────────────────────────
   const [notifs, setNotifs] = useState<Notif[]>([
     { id:1, type:'warning', read:false, title:'Item Kosong Ditemukan',   desc:'Banyak item di Unit Kearsipan belum memiliki file.', time:'Baru saja', href:'/unit/UK' },
     { id:2, type:'success', read:false, title:'Upload Berhasil',          desc:'File eviden berhasil diunggah ke sistem.',          time:'1 jam lalu', href:'/unit/UP' },
     { id:3, type:'info',    read:true,  title:'Folder Baru Ditambahkan',  desc:'Item baru berhasil dibuat di Penciptaan Arsip.',   time:'3 jam lalu', href:'/unit/UP' },
     { id:4, type:'warning', read:true,  title:'Progress UP Masih Rendah', desc:'Unit Pengolah baru mencapai kepatuhan rendah.',    time:'Kemarin',    href:'/'        },
   ]);
-  const unreadCount = notifs.filter(n => !n.read).length;
+
+  // ── Deadline alerts dari Supabase ─────────────────────────────────────────
+  const [deadlineAlerts, setDeadlineAlerts] = useState<DeadlineAlert[]>([])
+
+  useEffect(() => {
+    supabase
+      .from('unit_deadline')
+      .select('unit_id, unit_kode, unit_nama, urgency, days_remaining, target_date')
+      .in('urgency', ['overdue', 'kritis', 'mendekat'])
+      .order('days_remaining', { ascending: true, nullsFirst: false })
+      .then(({ data }) => setDeadlineAlerts(data ?? []))
+  }, [])
+
+  const urgentDeadlineCount = deadlineAlerts.filter(d => d.urgency === 'overdue' || d.urgency === 'kritis').length
+  const unreadCount = notifs.filter(n => !n.read).length + urgentDeadlineCount
 
   const notifRef    = useRef<HTMLDivElement>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -95,7 +115,6 @@ export default function HeaderActions() {
     if (!profilEdit.nama.trim()) return;
     setSavingProfil(true);
     await new Promise(r => setTimeout(r, 500));
-    // ✅ Update state profil → nama di header langsung berubah
     setProfil({ ...profilEdit });
     localStorage.setItem('sidoku_profil', JSON.stringify(profilEdit));
     setProfilMsg('✓ Profil berhasil disimpan!');
@@ -189,6 +208,59 @@ export default function HeaderActions() {
               </div>
             </div>
             <div className="divide-y divide-[#F1F3F5] max-h-72 overflow-y-auto">
+
+              {/* ── Deadline alerts (dari database) ──────────────────────── */}
+              {deadlineAlerts.length > 0 && (
+                <>
+                  <div className="px-4 py-1.5 bg-gray-50">
+                    <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Deadline Audit</span>
+                  </div>
+                  {deadlineAlerts.map(d => {
+                    const isUrgent = d.urgency === 'overdue' || d.urgency === 'kritis'
+                    return (
+                      <div key={d.unit_id}
+                        className={clsx('flex items-start gap-3 px-4 py-3 hover:bg-[#F8F9FB] transition-colors cursor-pointer',
+                          isUrgent ? 'bg-red-50/40' : 'bg-yellow-50/30')}
+                        onClick={() => { setShowNotif(false); router.push('/notifikasi'); }}>
+                        <div className={clsx('w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5 border',
+                          d.urgency === 'overdue' ? 'bg-red-50 border-red-100' :
+                          d.urgency === 'kritis'  ? 'bg-orange-50 border-orange-100' :
+                                                    'bg-yellow-50 border-yellow-100')}>
+                          <AlertTriangle size={15} className={
+                            d.urgency === 'overdue' ? 'text-red-500' :
+                            d.urgency === 'kritis'  ? 'text-orange-500' : 'text-yellow-500'} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-[11px] font-black text-[#1A1C1E]">{d.unit_nama}</p>
+                            {isUrgent && <span className="w-2 h-2 rounded-full bg-rose-500 flex-shrink-0" />}
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+                            {d.urgency === 'overdue'
+                              ? `Terlambat ${Math.abs(d.days_remaining ?? 0)} hari dari target`
+                              : d.urgency === 'kritis'
+                              ? `${d.days_remaining} hari lagi — segera tindak lanjuti`
+                              : `${d.days_remaining} hari lagi menuju deadline`}
+                          </p>
+                          <p className="text-[9px] text-slate-300 font-bold mt-1 flex items-center gap-1">
+                            <Clock size={9} />
+                            {d.target_date
+                              ? new Date(d.target_date).toLocaleDateString('id-ID', { day:'numeric', month:'short', year:'numeric' })
+                              : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </>
+              )}
+
+              {/* ── Notifikasi statis ─────────────────────────────────────── */}
+              {deadlineAlerts.length > 0 && (
+                <div className="px-4 py-1.5 bg-gray-50">
+                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Aktivitas Sistem</span>
+                </div>
+              )}
               {notifs.map(n => (
                 <div key={n.id}
                   className={clsx('flex items-start gap-3 px-4 py-3 hover:bg-[#F8F9FB] transition-colors cursor-pointer', !n.read && 'bg-blue-50/40')}
@@ -209,7 +281,7 @@ export default function HeaderActions() {
               ))}
             </div>
             <div className="px-4 py-3 border-t border-[#F1F3F5]">
-              <Link href="/pencarian" onClick={() => setShowNotif(false)}
+              <Link href="/notifikasi" onClick={() => setShowNotif(false)}
                 className="flex items-center justify-center gap-1 text-[10px] font-black text-[#1E3A8A] hover:underline">
                 Lihat semua aktivitas <ChevronRight size={11} />
               </Link>
@@ -236,7 +308,7 @@ export default function HeaderActions() {
                 <button onClick={() => { setShowSettings(false); setActiveTab(null); }} className="text-slate-300 hover:text-slate-500"><X size={14} /></button>
               </div>
 
-              {/* ✅ User info — pakai profil state, bukan hardcode */}
+              {/* User info */}
               <div className="px-4 py-3.5 border-b border-[#F1F3F5]">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-slate-100 border border-[#E9ECEF] overflow-hidden flex-shrink-0">
@@ -396,7 +468,7 @@ export default function HeaderActions() {
         )}
       </div>
 
-      {/* ── User info — ✅ reaktif dari profil state ───────────────────────── */}
+      {/* ── User info ─────────────────────────────────────────────────────── */}
       <div className="h-6 w-px bg-[#E9ECEF] hidden sm:block" />
       <div className="flex items-center gap-3">
         <div className="text-right hidden md:block">
