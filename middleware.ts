@@ -24,7 +24,8 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   const isLoginPage = request.nextUrl.pathname === '/login';
-  const isPublicPath = isLoginPage;
+  const isApiRoute = request.nextUrl.pathname.startsWith('/api');
+  const isPublicPath = isLoginPage || isApiRoute;
 
   // Belum login → redirect ke /login
   if (!user && !isPublicPath) {

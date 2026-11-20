@@ -9,6 +9,7 @@ import { clsx } from 'clsx';
 import SidebarNav from '@/components/SidebarNav';
 import SidebarLogout from '@/components/SidebarLogout';
 import HeaderActions from '@/components/HeaderActions';
+import ChatBot from '@/components/ChatBot';
 
 const STORAGE_KEY = 'sidoku_sidebar_collapsed';
 
@@ -171,6 +172,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Konten */}
         <main className="flex-1 min-w-0 p-4 sm:p-5 lg:p-6">{children}</main>
+
+        {/* Floating Chatbot AI */}
+        <ChatBot />
       </div>
     </div>
   );
