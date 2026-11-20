@@ -17,6 +17,7 @@ import {
   Plus,
   History,
   ChevronLeft,
+  Pencil,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -118,6 +119,10 @@ export default function ChatBot() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [suggestions, setSuggestions] = useState<string[]>(INITIAL_SUGGESTIONS);
+
+  // Rename session state
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -260,6 +265,34 @@ export default function ChatBot() {
     }
 
     updateSessions(filtered, nextActive);
+  };
+
+  // Mulai ubah nama percakapan
+  const handleStartEdit = (e: React.MouseEvent, session: ChatSession) => {
+    e.stopPropagation();
+    setEditingSessionId(session.id);
+    setEditingTitle(session.title);
+  };
+
+  // Simpan nama baru percakapan
+  const handleSaveEdit = (e: React.MouseEvent | React.KeyboardEvent, sessionId: string) => {
+    e.stopPropagation();
+    const trimmed = editingTitle.trim();
+    if (trimmed) {
+      const updated = sessions.map((s) =>
+        s.id === sessionId ? { ...s, title: trimmed } : s
+      );
+      updateSessions(updated);
+    }
+    setEditingSessionId(null);
+    setEditingTitle('');
+  };
+
+  // Batalkan ubah nama
+  const handleCancelEdit = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    setEditingSessionId(null);
+    setEditingTitle('');
   };
 
   // Bersihkan percakapan aktif & reset ke pesan default sambutan
@@ -483,9 +516,24 @@ export default function ChatBot() {
                     </span>
                   )}
                 </div>
-                <p className="text-blue-200 text-[11px] leading-tight truncate max-w-[190px]">
-                  {showHistory ? 'Pilih obrolan sebelumnya' : currentSession?.title || 'Panduan Navigasi'}
-                </p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-blue-200 text-[11px] leading-tight truncate max-w-[190px]">
+                    {showHistory ? 'Pilih obrolan sebelumnya' : currentSession?.title || 'Panduan Navigasi'}
+                  </p>
+                  {!showHistory && currentSession && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowHistory(true);
+                        handleStartEdit(e, currentSession);
+                      }}
+                      title="Ubah nama percakapan"
+                      className="text-blue-300/70 hover:text-white transition p-0.5"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -567,35 +615,81 @@ export default function ChatBot() {
                         : 'bg-white hover:bg-slate-50 border-[#E9ECEF]'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                    {editingSessionId === session.id ? (
                       <div
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs ${
-                          isActive
-                            ? 'bg-[#1E3A8A] text-white'
-                            : 'bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-[#1E3A8A]'
-                        }`}
+                        className="flex items-center gap-1.5 flex-1 min-w-0"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <MessageSquare size={13} />
-                      </div>
-                      <div className="min-w-0">
-                        <p
-                          className={`text-xs font-semibold truncate ${
-                            isActive ? 'text-[#1E3A8A]' : 'text-slate-800'
-                          }`}
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editingTitle}
+                          onChange={(e) => setEditingTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveEdit(e, session.id);
+                            if (e.key === 'Escape') handleCancelEdit(e);
+                          }}
+                          placeholder="Nama percakapan..."
+                          className="w-full text-xs bg-white border border-[#1E3A8A] rounded-lg px-2.5 py-1 outline-none text-slate-800 focus:ring-2 focus:ring-blue-100"
+                        />
+                        <button
+                          onClick={(e) => handleSaveEdit(e, session.id)}
+                          title="Simpan nama"
+                          className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
                         >
-                          {session.title}
-                        </p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{dateStr}</p>
+                          <Check size={14} />
+                        </button>
+                        <button
+                          onClick={handleCancelEdit}
+                          title="Batal"
+                          className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg transition"
+                        >
+                          <X size={14} />
+                        </button>
                       </div>
-                    </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2 flex-1">
+                          <div
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs ${
+                              isActive
+                                ? 'bg-[#1E3A8A] text-white'
+                                : 'bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-[#1E3A8A]'
+                            }`}
+                          >
+                            <MessageSquare size={13} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={`text-xs font-semibold truncate ${
+                                isActive ? 'text-[#1E3A8A]' : 'text-slate-800'
+                              }`}
+                            >
+                              {session.title}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{dateStr}</p>
+                          </div>
+                        </div>
 
-                    <button
-                      onClick={(e) => handleDeleteSession(e, session.id)}
-                      title="Hapus percakapan ini"
-                      className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            onClick={(e) => handleStartEdit(e, session)}
+                            title="Ubah nama percakapan"
+                            className="p-1.5 text-slate-400 hover:text-[#1E3A8A] hover:bg-blue-100/60 rounded-lg transition"
+                          >
+                            <Pencil size={13} />
+                          </button>
+
+                          <button
+                            onClick={(e) => handleDeleteSession(e, session.id)}
+                            title="Hapus percakapan ini"
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })}
